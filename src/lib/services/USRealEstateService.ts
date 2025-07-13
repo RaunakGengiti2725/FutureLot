@@ -41,15 +41,13 @@ export interface PropertyEstimate {
 
 export class USRealEstateService {
   private static instance: USRealEstateService | null = null
-  private readonly apiKey: string
-  private readonly apiHost: string = 'us-real-estate.p.rapidapi.com'
-  private readonly cache: Map<string, { data: any; timestamp: number }> = new Map()
+  private cache: Map<string, { data: any; timestamp: number }> = new Map()
   private readonly CACHE_DURATION = 15 * 60 * 1000 // 15 minutes
+  private readonly RAPIDAPI_KEY = process.env.NEXT_PUBLIC_RAPIDAPI_KEY || process.env.RAPIDAPI_KEY
 
   private constructor() {
-    this.apiKey = process.env.RAPIDAPI_KEY || ''
-    if (!this.apiKey) {
-      throw new Error('RAPIDAPI_KEY is required')
+    if (!this.RAPIDAPI_KEY) {
+      console.warn('RAPIDAPI_KEY not found. Service will use mock data.')
     }
   }
 
@@ -62,22 +60,21 @@ export class USRealEstateService {
 
   private getHeaders() {
     return {
-      'X-RapidAPI-Key': this.apiKey,
-      'X-RapidAPI-Host': this.apiHost
+      'X-RapidAPI-Key': this.RAPIDAPI_KEY!,
+      'X-RapidAPI-Host': 'us-real-estate.p.rapidapi.com'
     }
   }
 
-  private async fetchWithCache(key: string, fetcher: () => Promise<any>) {
-    const now = Date.now()
+  private fetchWithCache<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
     const cached = this.cache.get(key)
-
-    if (cached && now - cached.timestamp < this.CACHE_DURATION) {
-      return cached.data
+    if (cached && Date.now() - cached.timestamp < this.CACHE_DURATION) {
+      return Promise.resolve(cached.data)
     }
 
-    const data = await fetcher()
-    this.cache.set(key, { data, timestamp: now })
-    return data
+    return fetcher().then(data => {
+      this.cache.set(key, { data, timestamp: Date.now() })
+      return data
+    })
   }
 
   public async searchProperties(params: {

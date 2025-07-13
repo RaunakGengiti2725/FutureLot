@@ -3,41 +3,49 @@
 import React, { useState } from 'react'
 import { useSession } from 'next-auth/react'
 import { Search, Target, TrendingUp, Shield, DollarSign, MapPin, Sparkles, Lock, Crown, AlertTriangle, Eye, Home, Loader2 } from 'lucide-react'
+import { USRealEstateService } from '@/lib/services/USRealEstateService'
 
 interface SearchCriteria {
+  state: string
   budget: string
   riskTolerance: string
   yieldGoal: string
   timeframe: string
+  propertyType: string
+  bedrooms: string
+  bathrooms: string
   climateSafe: boolean
   nearInfrastructure: boolean
   lowVolatility: boolean
 }
 
-interface SuggestedArea {
+interface SuggestedProperty {
   id: string
+  address: string
   city: string
   state: string
-  score: number
+  price: number
+  type: string
+  squareFootage: number
+  bedrooms: number
+  bathrooms: number
+  yearBuilt: number
   appreciation: number
   yieldPotential: number
   riskLevel: string
-  medianPrice: number
+  score: number
+  mlsNumber: string
   reasons: string[]
   pros: string[]
   cons: string[]
-  properties: number
   marketPhase: string
-  demographics: {
-    medianIncome: number
-    ageRange: string
-    growth: string
-  }
   investment: {
     capRate: number
     cashFlow: number
     priceToRent: number
   }
+  lat: number
+  lng: number
 }
 
 interface AnalysisState {
@@ -47,18 +55,153 @@ interface AnalysisState {
   message: string
 }
 
+const US_STATES = [
+  { code: 'AL', name: 'Alabama' },
+  { code: 'AK', name: 'Alaska' },
+  { code: 'AZ', name: 'Arizona' },
+  { code: 'AR', name: 'Arkansas' },
+  { code: 'CA', name: 'California' },
+  { code: 'CO', name: 'Colorado' },
+  { code: 'CT', name: 'Connecticut' },
+  { code: 'DE', name: 'Delaware' },
+  { code: 'FL', name: 'Florida' },
+  { code: 'GA', name: 'Georgia' },
+  { code: 'HI', name: 'Hawaii' },
+  { code: 'ID', name: 'Idaho' },
+  { code: 'IL', name: 'Illinois' },
+  { code: 'IN', name: 'Indiana' },
+  { code: 'IA', name: 'Iowa' },
+  { code: 'KS', name: 'Kansas' },
+  { code: 'KY', name: 'Kentucky' },
+  { code: 'LA', name: 'Louisiana' },
+  { code: 'ME', name: 'Maine' },
+  { code: 'MD', name: 'Maryland' },
+  { code: 'MA', name: 'Massachusetts' },
+  { code: 'MI', name: 'Michigan' },
+  { code: 'MN', name: 'Minnesota' },
+  { code: 'MS', name: 'Mississippi' },
+  { code: 'MO', name: 'Missouri' },
+  { code: 'MT', name: 'Montana' },
+  { code: 'NE', name: 'Nebraska' },
+  { code: 'NV', name: 'Nevada' },
+  { code: 'NH', name: 'New Hampshire' },
+  { code: 'NJ', name: 'New Jersey' },
+  { code: 'NM', name: 'New Mexico' },
+  { code: 'NY', name: 'New York' },
+  { code: 'NC', name: 'North Carolina' },
+  { code: 'ND', name: 'North Dakota' },
+  { code: 'OH', name: 'Ohio' },
+  { code: 'OK', name: 'Oklahoma' },
+  { code: 'OR', name: 'Oregon' },
+  { code: 'PA', name: 'Pennsylvania' },
+  { code: 'RI', name: 'Rhode Island' },
+  { code: 'SC', name: 'South Carolina' },
+  { code: 'SD', name: 'South Dakota' },
+  { code: 'TN', name: 'Tennessee' },
+  { code: 'TX', name: 'Texas' },
+  { code: 'UT', name: 'Utah' },
+  { code: 'VT', name: 'Vermont' },
+  { code: 'VA', name: 'Virginia' },
+  { code: 'WA', name: 'Washington' },
+  { code: 'WV', name: 'West Virginia' },
+  { code: 'WI', name: 'Wisconsin' },
+  { code: 'WY', name: 'Wyoming' }
+]
+
+// Helper functions for property analysis
+const calculateRiskLevel = (property: any, criteria: SearchCriteria): string => {
+  const riskFactors = []
+  
+  // Price volatility risk
+  if (property.price > 1000000) riskFactors.push(1)
+  if (property.yearBuilt < 1950) riskFactors.push(1)
+  
+  // Location risk
+  if (!property.lat || !property.lng) riskFactors.push(1)
+  
+  // Property condition risk
+  if (property.yearBuilt < 1980 && property.price < 200000) riskFactors.push(1)
+  
+  const riskScore = riskFactors.length
+  
+  if (riskScore <= 1) return 'Low'
+  if (riskScore <= 2) return 'Medium'
+  return 'High'
+}
+
+const calculatePropertyScore = (property: any, criteria: SearchCriteria): number => {
+  let score = 50 // Base score
+  
+  // Location score (20 points)
+  if (property.lat && property.lng) score += 20
+  
+  // Price score (15 points)
+  const budget = parseInt(criteria.budget.replace(/[^0-9]/g, '')) || 1000000
+  if (property.price <= budget * 0.8) score += 15
+  else if (property.price <= budget * 0.9) score += 10
+  else if (property.price <= budget) score += 5
+  
+  // Property features score (15 points)
+  if (property.yearBuilt > 2000) score += 5
+  if (property.squareFootage > 1500) score += 5
+  if (property.bedrooms >= 3) score += 5
+  
+  return Math.min(100, score)
+}
+
+const generateReasons = (property: any, criteria: SearchCriteria): string[] => {
+  return [
+    `${property.squareFootage} sq ft, ${property.bedrooms} bed, ${property.bathrooms} bath`,
+    `Built in ${property.yearBuilt}`,
+    `Price: $${property.price.toLocaleString()}`,
+    `Estimated rental yield: ${(property.rentalEstimate / property.price * 12 * 100).toFixed(1)}%`,
+    `Risk level: ${calculateRiskLevel(property, criteria)}`
+  ]
+}
+
+const generatePros = (property: any, criteria: SearchCriteria): string[] => {
+  const pros = []
+  
+  if (property.yearBuilt > 2000) pros.push('Modern construction')
+  if (property.squareFootage > 2000) pros.push('Spacious layout')
+  if (property.price < parseInt(criteria.budget.replace(/[^0-9]/g, '')) * 0.8) pros.push('Below budget')
+  if (calculateRiskLevel(property, criteria) === 'Low') pros.push('Low risk profile')
+  
+  return pros.length ? pros : ['Good investment potential']
+}
+
+const generateCons = (property: any, criteria: SearchCriteria): string[] => {
+  const cons = []
+  
+  if (property.yearBuilt < 1980) cons.push('Older property')
+  if (property.price > parseInt(criteria.budget.replace(/[^0-9]/g, '')) * 0.9) cons.push('Near budget limit')
+  if (calculateRiskLevel(property, criteria) === 'High') cons.push('Higher risk profile')
+  
+  return cons.length ? cons : ['Market competition']
+}
+
+const determineMarketPhase = (city: string, state: string): string => {
+  // This would ideally use real market data
+  // For now, return a reasonable default
+  return 'Steady Growth'
+}
+
 export default function AIScoutPage() {
   const { data: session } = useSession()
   const [criteria, setCriteria] = useState<SearchCriteria>({
+    state: '',
     budget: '',
     riskTolerance: 'moderate',
     yieldGoal: '',
     timeframe: '12',
+    propertyType: 'any',
+    bedrooms: 'any',
+    bathrooms: 'any',
     climateSafe: false,
     nearInfrastructure: false,
     lowVolatility: false
   })
-  const [suggestions, setSuggestions] = useState<SuggestedArea[]>([])
+  const [suggestions, setSuggestions] = useState<SuggestedProperty[]>([])
   const [analysisState, setAnalysisState] = useState<AnalysisState>({
     isAnalyzing: false,
     progress: 0,
@@ -68,159 +211,70 @@ export default function AIScoutPage() {
   const [hasSearched, setHasSearched] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const generateSuggestions = async (searchCriteria: SearchCriteria): Promise<SuggestedArea[]> => {
+  const generateSuggestions = async (criteria: SearchCriteria): Promise<SuggestedProperty[]> => {
+    const usRealEstateService = USRealEstateService.getInstance()
+    
+    // Convert criteria to search parameters
+    const searchParams = {
+      state: criteria.state,
+      type: criteria.propertyType !== 'any' ? criteria.propertyType.toLowerCase() : undefined,
+      beds_min: criteria.bedrooms !== 'any' ? parseInt(criteria.bedrooms) : undefined,
+      baths_min: criteria.bathrooms !== 'any' ? parseInt(criteria.bathrooms) : undefined,
+      price_max: criteria.budget !== '' ? parseInt(criteria.budget.replace(/[^0-9]/g, '')) : undefined,
+      limit: 50
+    }
+
     try {
-      // List of major US cities to analyze
-      const citiesToAnalyze = [
-        { city: 'Austin', state: 'TX' },
-        { city: 'Nashville', state: 'TN' },
-        { city: 'Tampa', state: 'FL' },
-        { city: 'Phoenix', state: 'AZ' },
-        { city: 'Denver', state: 'CO' },
-        { city: 'Miami', state: 'FL' },
-        { city: 'Charlotte', state: 'NC' },
-        { city: 'Dallas', state: 'TX' },
-        { city: 'Atlanta', state: 'GA' },
-        { city: 'Orlando', state: 'FL' },
-        { city: 'Las Vegas', state: 'NV' },
-        { city: 'Raleigh', state: 'NC' }
-      ]
-
-      const budgetFilter = parseFloat(searchCriteria.budget) || 1000000
-      const yieldGoal = parseFloat(searchCriteria.yieldGoal) || 6
+      // Get properties from the real estate service
+      const properties = await usRealEstateService.searchProperties(searchParams)
       
-      console.log('🔍 Fetching real predictions for cities:', citiesToAnalyze)
-      
-      // Fetch predictions for each city
-      const cityPromises = citiesToAnalyze.map(async (cityInfo) => {
-        try {
-          const response = await fetch(
-            `/api/ai/predictions?region=${encodeURIComponent(cityInfo.city.toLowerCase())}&limit=100&timeframe=${searchCriteria.timeframe}`,
-            {
-              method: 'GET',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-            }
-          )
-
-          if (!response.ok) {
-            console.error(`Failed to fetch predictions for ${cityInfo.city}:`, response.status, response.statusText)
-            return null
-          }
-
-          const data = await response.json()
-          console.log(`✅ Got ${data.predictions?.length || 0} predictions for ${cityInfo.city}`)
-
-          if (!data.predictions || data.predictions.length === 0) {
-            return null
-          }
-
-          // Calculate city-level metrics from property predictions
-          const properties = data.predictions
-          const avgAppreciation = properties.reduce((sum: number, p: any) => sum + (p.appreciation || 0), 0) / properties.length
-          const avgPrice = properties.reduce((sum: number, p: any) => sum + (p.price || 0), 0) / properties.length
-          const avgConfidence = properties.reduce((sum: number, p: any) => sum + (p.confidence || 0), 0) / properties.length
-          const avgRisk = properties.reduce((sum: number, p: any) => sum + (p.riskScore || 0), 0) / properties.length
-
-          // Apply filters
-          if (avgPrice > budgetFilter) return null
-          
-          const estimatedYield = Math.max(4, Math.min(12, avgAppreciation * 0.6 + Math.random() * 2))
-          if (estimatedYield < yieldGoal) return null
-
-          // Risk level based on risk score
-          let riskLevel = 'Medium'
-          if (avgRisk < 30) riskLevel = 'Low'
-          else if (avgRisk > 60) riskLevel = 'High'
-          
-          // Apply risk tolerance filter
-          if (searchCriteria.riskTolerance === 'low' && riskLevel !== 'Low') return null
-          if (searchCriteria.riskTolerance === 'conservative' && riskLevel === 'High') return null
-
-          // Calculate score based on real data
-          let score = 50 // Base score
-          score += Math.min(30, avgAppreciation * 2) // Growth potential (max 30 points)
-          score += Math.min(25, estimatedYield * 2.5) // Yield potential (max 25 points)
-          score += avgConfidence * 0.2 // Confidence boost (max 20 points)
-          score += riskLevel === 'Low' ? 10 : riskLevel === 'Medium' ? 5 : 0 // Risk adjustment
-          score = Math.max(0, Math.min(100, Math.round(score)))
-
-          return {
-            city: cityInfo.city,
-            state: cityInfo.state,
-            score,
-            appreciation: Math.round(avgAppreciation * 100) / 100,
-            yieldPotential: Math.round(estimatedYield * 100) / 100,
-            riskLevel,
-            medianPrice: Math.round(avgPrice),
-            properties: properties.length,
-            confidence: Math.round(avgConfidence),
-            rawData: data
-          }
-        } catch (error) {
-          console.error(`Error fetching data for ${cityInfo.city}:`, error)
-          return null
-        }
-      })
-
-      const cityResults = await Promise.all(cityPromises)
-      const validCities = cityResults.filter(city => city !== null)
-      
-      console.log('📊 Valid cities after filtering:', validCities.length)
-
-      if (validCities.length === 0) {
-        throw new Error('No cities match your criteria. Try adjusting your budget or yield requirements.')
+      if (!properties.length) {
+        throw new Error('No properties match your criteria. Try adjusting your filters.')
       }
 
-      // Sort by score and take top 5
-      const topCities = validCities
-        .sort((a, b) => b!.score - a!.score)
-        .slice(0, 5)
+      // Transform properties to SuggestedProperty format
+      const suggestions: SuggestedProperty[] = await Promise.all(
+        properties.map(async (prop) => {
+          // Get additional property details
+          const details = await usRealEstateService.getPropertyDetails(prop.id)
+          
+          // Calculate investment metrics
+          const yieldPotential = (prop.rentalEstimate || details?.rentEstimate || prop.price * 0.008) / prop.price * 12 * 100
+          const appreciation = details?.appreciation || 5 // Default to 5% if not available
+          
+          return {
+            id: prop.id,
+            address: prop.address,
+            city: prop.city,
+            state: prop.state,
+            price: prop.price,
+            type: prop.propertyType,
+            squareFootage: prop.squareFootage,
+            bedrooms: prop.bedrooms,
+            bathrooms: prop.bathrooms,
+            yearBuilt: prop.yearBuilt,
+            appreciation: appreciation,
+            yieldPotential: yieldPotential,
+            riskLevel: calculateRiskLevel(prop, criteria),
+            score: calculatePropertyScore(prop, criteria),
+            mlsNumber: prop.mlsNumber,
+            reasons: generateReasons(prop, criteria),
+            pros: generatePros(prop, criteria),
+            cons: generateCons(prop, criteria),
+            marketPhase: determineMarketPhase(prop.city, prop.state),
+            investment: {
+              capRate: yieldPotential,
+              cashFlow: (prop.rentalEstimate || details?.rentEstimate || prop.price * 0.008) - (prop.price * 0.06 / 12), // Estimated monthly cash flow
+              priceToRent: prop.price / (prop.rentalEstimate || details?.rentEstimate || prop.price * 0.008) / 12
+            },
+            lat: prop.lat,
+            lng: prop.lng
+          }
+        })
+      )
 
-      // Generate detailed suggestions from real data
-      return topCities.map((city, index) => ({
-        id: `suggestion-${city!.city}-${index}`,
-        city: city!.city,
-        state: city!.state,
-        score: city!.score,
-        appreciation: city!.appreciation,
-        yieldPotential: city!.yieldPotential,
-        riskLevel: city!.riskLevel,
-        medianPrice: city!.medianPrice,
-        reasons: [
-          `${city!.appreciation.toFixed(1)}% projected annual appreciation`,
-          `${city!.yieldPotential.toFixed(1)}% estimated rental yield`,
-          `${city!.riskLevel.toLowerCase()} risk profile with ${city!.confidence}% confidence`,
-          `${city!.properties} properties analyzed`,
-          `Strong market fundamentals detected by AI`
-        ],
-        pros: [
-          'AI-verified growth potential',
-          'Strong rental market indicators',
-          'Favorable risk-return profile',
-          'Active property market',
-          'Positive market momentum'
-        ].slice(0, 3),
-        cons: [
-          'Market competition increasing',
-          'Economic sensitivity',
-          'Regulatory considerations'
-        ].slice(0, 2),
-        properties: city!.properties,
-        marketPhase: city!.appreciation > 10 ? 'High Growth' : city!.appreciation > 6 ? 'Steady Growth' : 'Stable',
-        demographics: {
-          medianIncome: Math.round(50000 + Math.random() * 40000), // Estimated
-          ageRange: '28-42',
-          growth: city!.appreciation > 8 ? 'High' : 'Moderate'
-        },
-        investment: {
-          capRate: Math.round(city!.yieldPotential * 100) / 100,
-          cashFlow: Math.round(city!.medianPrice * city!.yieldPotential / 100 / 12),
-          priceToRent: Math.round(city!.medianPrice / (city!.medianPrice * city!.yieldPotential / 100))
-        }
-      }))
-
+      // Sort by score
+      return suggestions.sort((a, b) => b.score - a.score)
     } catch (error) {
       console.error('Error generating suggestions:', error)
       throw error
@@ -302,22 +356,22 @@ export default function AIScoutPage() {
     }
   }
 
-  const handleViewProperties = (suggestion: SuggestedArea) => {
-    console.log('🏠 View Properties clicked for:', suggestion.city, suggestion.state)
-    // Navigate to map view with the selected city
-    window.location.href = `/dashboard/map?city=${encodeURIComponent(suggestion.city)}&state=${encodeURIComponent(suggestion.state)}`
+  const handleViewProperties = (property: SuggestedProperty) => {
+    console.log('🏠 View Properties clicked for:', property.address)
+    // Navigate to map view with the selected property
+    window.location.href = `/dashboard/map?lat=${property.lat}&lng=${property.lng}`
   }
 
-  const handleMarketDetails = (suggestion: SuggestedArea) => {
-    console.log('📊 Market Details clicked for:', suggestion.city, suggestion.state)
-    // Navigate to analytics with the selected city
-    window.location.href = `/dashboard/analytics?city=${encodeURIComponent(suggestion.city)}&state=${encodeURIComponent(suggestion.state)}`
+  const handleMarketDetails = (property: SuggestedProperty) => {
+    console.log('📊 Market Details clicked for:', property.address)
+    // Navigate to analytics with the selected property
+    window.location.href = `/dashboard/analytics?lat=${property.lat}&lng=${property.lng}`
   }
 
-  const handleSave = (suggestion: SuggestedArea) => {
-    console.log('💾 Save clicked for:', suggestion.city, suggestion.state)
+  const handleSave = (property: SuggestedProperty) => {
+    console.log('💾 Save clicked for:', property.address)
     // Add to favorites
-    alert(`Saved ${suggestion.city}, ${suggestion.state} to your favorites!`)
+    alert(`Saved ${property.address} to your favorites!`)
   }
 
   const getScoreColor = (score: number) => {
@@ -353,10 +407,26 @@ export default function AIScoutPage() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 space-y-6">
             <h3 className="text-lg font-semibold text-gray-900 flex items-center space-x-2">
               <Target className="h-5 w-5 text-blue-600" />
-              <span>Investment Criteria</span>
+              <span>Property Search Criteria</span>
             </h3>
             
             <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  State
+                </label>
+                <select 
+                  value={criteria.state} 
+                  onChange={(e) => setCriteria(prev => ({ ...prev, state: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="">Select State</option>
+                  {US_STATES.map(state => (
+                    <option key={state.code} value={state.code}>{state.name}</option>
+                  ))}
+                </select>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Investment Budget
@@ -378,6 +448,57 @@ export default function AIScoutPage() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Property Type
+                </label>
+                <select 
+                  value={criteria.propertyType} 
+                  onChange={(e) => setCriteria(prev => ({ ...prev, propertyType: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="any">Any Type</option>
+                  <option value="house">House</option>
+                  <option value="condo">Condo</option>
+                  <option value="townhouse">Townhouse</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Bedrooms
+                </label>
+                <select 
+                  value={criteria.bedrooms} 
+                  onChange={(e) => setCriteria(prev => ({ ...prev, bedrooms: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="any">Any</option>
+                  <option value="1">1+</option>
+                  <option value="2">2+</option>
+                  <option value="3">3+</option>
+                  <option value="4">4+</option>
+                  <option value="5">5+</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Bathrooms
+                </label>
+                <select 
+                  value={criteria.bathrooms} 
+                  onChange={(e) => setCriteria(prev => ({ ...prev, bathrooms: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="any">Any</option>
+                  <option value="1">1+</option>
+                  <option value="2">2+</option>
+                  <option value="3">3+</option>
+                  <option value="4">4+</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
                   Target Yield
                 </label>
                 <select 
@@ -391,21 +512,6 @@ export default function AIScoutPage() {
                   <option value="8">8%+ Annual Return</option>
                   <option value="10">10%+ Annual Return</option>
                   <option value="12">12%+ Annual Return</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Risk Tolerance
-                </label>
-                <select 
-                  value={criteria.riskTolerance} 
-                  onChange={(e) => setCriteria(prev => ({ ...prev, riskTolerance: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="low">Conservative (Low Risk)</option>
-                  <option value="moderate">Moderate Risk</option>
-                  <option value="high">Aggressive (High Risk)</option>
                 </select>
               </div>
 
@@ -469,7 +575,7 @@ export default function AIScoutPage() {
                 ) : (
                   <>
                     <Sparkles className="h-4 w-4" />
-                    <span>Find Opportunities</span>
+                    <span>Find Properties</span>
                   </>
                 )}
               </button>
@@ -550,44 +656,48 @@ export default function AIScoutPage() {
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <h3 className="text-xl font-semibold text-gray-900">
-                  Top {suggestions.length} Investment Opportunities
+                  Top {suggestions.length} Investment Properties
                 </h3>
                 <span className="text-sm text-gray-600">
                   Based on real data + AI analysis
                 </span>
               </div>
 
-              {suggestions.map((suggestion, index) => (
-                <div key={suggestion.id} className={`bg-white rounded-xl shadow-sm border p-6 ${getScoreBg(suggestion.score)}`}>
+              {suggestions.map((property, index) => (
+                <div key={property.id} className={`bg-white rounded-xl shadow-sm border p-6 ${getScoreBg(property.score)}`}>
                   <div className="flex items-start justify-between mb-4">
                     <div className="flex-1">
                       <div className="flex items-center space-x-3 mb-2">
                         <h4 className="text-xl font-bold text-gray-900">
-                          {suggestion.city}, {suggestion.state}
+                          {property.address}
                         </h4>
                         <span className="text-sm bg-gray-100 text-gray-700 px-2 py-1 rounded">
                           #{index + 1}
                         </span>
                       </div>
                       
-                      <div className="grid grid-cols-3 gap-4 text-sm">
+                      <div className="grid grid-cols-4 gap-4 text-sm">
                         <div>
-                          <span className="text-gray-600">Median Price:</span>
-                          <div className="font-semibold">${suggestion.medianPrice.toLocaleString()}</div>
+                          <span className="text-gray-600">Price:</span>
+                          <div className="font-semibold">${property.price.toLocaleString()}</div>
                         </div>
                         <div>
-                          <span className="text-gray-600">Market Phase:</span>
-                          <div className="font-semibold text-blue-600">{suggestion.marketPhase}</div>
+                          <span className="text-gray-600">Type:</span>
+                          <div className="font-semibold">{property.type}</div>
                         </div>
                         <div>
-                          <span className="text-gray-600">Properties:</span>
-                          <div className="font-semibold">{suggestion.properties.toLocaleString()}</div>
+                          <span className="text-gray-600">Size:</span>
+                          <div className="font-semibold">{property.squareFootage} sqft</div>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Built:</span>
+                          <div className="font-semibold">{property.yearBuilt}</div>
                         </div>
                       </div>
                     </div>
                     <div className="text-center">
-                      <div className={`text-3xl font-bold ${getScoreColor(suggestion.score)}`}>
-                        {suggestion.score}
+                      <div className={`text-3xl font-bold ${getScoreColor(property.score)}`}>
+                        {property.score}
                       </div>
                       <div className="text-sm text-gray-600">AI Score</div>
                     </div>
@@ -595,19 +705,19 @@ export default function AIScoutPage() {
 
                   <div className="grid grid-cols-4 gap-3 mb-4">
                     <div className="bg-green-50 p-3 rounded-lg text-center">
-                      <div className="text-lg font-bold text-green-600">+{suggestion.appreciation}%</div>
+                      <div className="text-lg font-bold text-green-600">+{property.appreciation}%</div>
                       <div className="text-xs text-green-700">Annual Growth</div>
                     </div>
                     <div className="bg-blue-50 p-3 rounded-lg text-center">
-                      <div className="text-lg font-bold text-blue-600">{suggestion.yieldPotential}%</div>
+                      <div className="text-lg font-bold text-blue-600">{property.yieldPotential}%</div>
                       <div className="text-xs text-blue-700">Rental Yield</div>
                     </div>
                     <div className="bg-purple-50 p-3 rounded-lg text-center">
-                      <div className="text-lg font-bold text-purple-600">{suggestion.riskLevel}</div>
+                      <div className="text-lg font-bold text-purple-600">{property.riskLevel}</div>
                       <div className="text-xs text-purple-700">Risk Level</div>
                     </div>
                     <div className="bg-orange-50 p-3 rounded-lg text-center">
-                      <div className="text-lg font-bold text-orange-600">{suggestion.investment.capRate}%</div>
+                      <div className="text-lg font-bold text-orange-600">{property.investment.capRate}%</div>
                       <div className="text-xs text-orange-700">Cap Rate</div>
                     </div>
                   </div>
@@ -616,10 +726,10 @@ export default function AIScoutPage() {
                     <div>
                       <h5 className="font-medium text-gray-900 mb-2 flex items-center">
                         <TrendingUp className="h-4 w-4 text-green-600 mr-2" />
-                        Why This Market?
+                        Why This Property?
                       </h5>
                       <ul className="space-y-1 text-sm text-gray-700">
-                        {suggestion.reasons.slice(0, 3).map((reason, idx) => (
+                        {property.reasons.slice(0, 3).map((reason, idx) => (
                           <li key={idx} className="flex items-start">
                             <span className="text-green-500 mr-2">•</span>
                             {reason}
@@ -633,7 +743,7 @@ export default function AIScoutPage() {
                         Considerations
                       </h5>
                       <ul className="space-y-1 text-sm text-gray-700">
-                        {suggestion.cons.map((con, idx) => (
+                        {property.cons.map((con, idx) => (
                           <li key={idx} className="flex items-start">
                             <span className="text-yellow-500 mr-2">•</span>
                             {con}
@@ -645,19 +755,19 @@ export default function AIScoutPage() {
 
                   <div className="flex space-x-3">
                     <button 
-                      onClick={() => handleViewProperties(suggestion)}
+                      onClick={() => handleViewProperties(property)}
                       className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                     >
-                      View Properties
+                      View Details
                     </button>
                     <button 
-                      onClick={() => handleMarketDetails(suggestion)}
+                      onClick={() => handleMarketDetails(property)}
                       className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
                     >
-                      Market Details
+                      Market Analysis
                     </button>
                     <button 
-                      onClick={() => handleSave(suggestion)}
+                      onClick={() => handleSave(property)}
                       className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
                     >
                       Save
